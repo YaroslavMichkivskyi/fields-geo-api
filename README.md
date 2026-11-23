@@ -67,12 +67,19 @@ The organisation is taken from the `x-org-id` header; every query is scoped to i
 ## Running locally
 
 ```bash
-docker compose up -d          # PostGIS on localhost:5433 (dev + test databases)
+cp .env.example .env          # connection settings (Windows cmd: copy .env.example .env)
+docker compose up -d --wait   # PostGIS on localhost:5433 (dev + test databases)
 npm install
-npm run migration:run
-npm run seed                  # synthetic fields, samples, rivers around Poltava region
-npm run start:dev             # http://localhost:3000
-npm test                      # e2e + unit tests against the test database
+npm run migration:run         # enables the postgis extension, then the schema
+npm run start:dev             # http://localhost:3000/health
+npm test                      # migrates the test database, then e2e tests (Fastify inject)
+```
+
+Seed data (synthetic fields, samples and rivers around the Poltava region)
+arrives with M4 as `npm run seed`.
+
+```bash
+npm run migration:revert      # undo the last migration
 ```
 
 ## Project structure
@@ -91,7 +98,7 @@ docs/           query notes, EXPLAIN plans
 
 ## Roadmap
 
-- [ ] M0 — project skeleton: NestJS + Fastify, Docker PostGIS, TypeORM migrations
+- [x] M0 — project skeleton: NestJS + Fastify, Docker PostGIS, TypeORM migrations
 - [ ] M1 — GeoJSON in / out: `fields` table, create and read Features and FeatureCollections
 - [ ] M2 — geometry validation and repair (`ST_IsValid`, `ST_MakeValid`)
 - [ ] M3 — measurements: area, perimeter, label point; geometry vs geography
