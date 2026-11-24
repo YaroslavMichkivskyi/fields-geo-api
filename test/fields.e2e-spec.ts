@@ -137,10 +137,11 @@ describe('fields: GeoJSON in / out', () => {
 
   describe('GET /fields/:id and GET /fields', () => {
     it('reads one field back as a Feature', async () => {
-      const created = (await post(feature({ type: 'Polygon', coordinates: POLTAVA_FIELD }))).json();
+      const { warnings, ...created } = (await post(feature({ type: 'Polygon', coordinates: POLTAVA_FIELD }))).json();
 
       const res = await get(`/fields/${created.id}`);
 
+      expect(warnings).toEqual([]);
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual(created);
     });

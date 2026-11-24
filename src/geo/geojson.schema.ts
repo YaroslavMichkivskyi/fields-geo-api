@@ -10,7 +10,8 @@ import { inServiceArea } from './service-area';
  *   MultiPolygon     [polygon, polygon, ...]
  *   Feature          { type, geometry, properties, id? }
  *
- * Shape only. Whether a ring crosses itself is a question for PostGIS (M2).
+ * Shape only. Whether a ring crosses itself is a question for PostGIS
+ * (BoundaryService).
  */
 
 export const position = z
@@ -58,6 +59,9 @@ function* positionsOf(geometry: AreaGeometry): Generator<number[]> {
   for (const polygon of polygons) for (const ring of polygon) yield* ring;
 }
 
+/** More points than this is not a hand-drawn field but a dump to simplify first. */
+export const MAX_POINTS = 10_000;
+
 /** POST /fields body: a Feature whose properties describe the field. */
 export const fieldFeature = z
   .object({
@@ -79,7 +83,16 @@ export const fieldFeature = z
         message: '"crs" is not supported: GeoJSON coordinates are always WGS 84 longitude/latitude',
       });
     }
+    let points = 0;
     for (const [lng, lat] of positionsOf(feature.geometry)) {
+      if (++points > MAX_POINTS) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['geometry', 'coordinates'],
+          message: `a boundary may have at most ${MAX_POINTS} points`,
+        });
+        return;
+      }
       if (!inServiceArea(lng, lat)) {
         ctx.addIssue({
           code: 'custom',

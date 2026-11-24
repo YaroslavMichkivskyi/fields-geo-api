@@ -2,7 +2,7 @@ import { Body, Controller, Get, Header, Param, ParseUUIDPipe, Post } from '@nest
 import { OrgId } from '../common/org-id.decorator';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { fieldFeature, FieldFeatureInput } from '../geo/geojson.schema';
-import { Feature, FeatureCollection, FieldsService } from './fields.service';
+import { CreatedFeature, Feature, FeatureCollection, FieldsService } from './fields.service';
 
 /** RFC 7946 media type; clients that only know JSON parse it the same way. */
 const GEOJSON = 'application/geo+json';
@@ -16,7 +16,7 @@ export class FieldsController {
   create(
     @OrgId() orgId: string,
     @Body(new ZodValidationPipe(fieldFeature)) body: FieldFeatureInput,
-  ): Promise<Feature> {
+  ): Promise<CreatedFeature> {
     return this.fields.create(orgId, body);
   }
 

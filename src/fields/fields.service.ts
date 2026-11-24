@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { BoundaryService } from '../geo/boundary.service';
 import type { FieldFeatureInput } from '../geo/geojson.schema';
 
 /** 6 decimals of a degree ~ 11 cm: more is noise from GPS and float maths. */
@@ -31,6 +32,11 @@ export interface Feature {
   properties: { name: string; crop: string | null; season: number | null; createdAt: string };
 }
 
+/** POST answer: the stored Feature plus what was repaired on the way (RFC 7946 foreign member). */
+export interface CreatedFeature extends Feature {
+  warnings: string[];
+}
+
 export interface FeatureCollection {
   type: 'FeatureCollection';
   features: Feature[];
@@ -40,20 +46,23 @@ const FK_VIOLATION = '23503';
 
 @Injectable()
 export class FieldsService {
-  constructor(@InjectDataSource() private readonly db: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly db: DataSource,
+    private readonly boundary: BoundaryService,
+  ) {}
 
-  async create(orgId: string, input: FieldFeatureInput): Promise<Feature> {
+  async create(orgId: string, input: FieldFeatureInput): Promise<CreatedFeature> {
     const { name, crop, season } = input.properties;
+    // validated, repaired if needed, MultiPolygon in WGS 84 — or a 422
+    const { ewkb, warnings } = await this.boundary.prepare(input.geometry);
     try {
       const [row] = await this.db.query<{ id: string }[]>(
         `INSERT INTO fields (org_id, name, crop, season, geom)
-         VALUES ($1, $2, $3, $4,
-                 -- GeoJSON text -> geometry, tagged WGS 84, Polygon promoted to MultiPolygon
-                 ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON($5), 4326)))
+         VALUES ($1, $2, $3, $4, $5::geometry)  -- hex EWKB -> geometry, SRID included
          RETURNING id`,
-        [orgId, name, crop ?? null, season ?? null, JSON.stringify(input.geometry)],
+        [orgId, name, crop ?? null, season ?? null, ewkb],
       );
-      return this.findOne(orgId, row.id);
+      return { ...(await this.findOne(orgId, row.id)), warnings };
     } catch (e) {
       if ((e as { code?: string }).code === FK_VIOLATION) {
         throw new NotFoundException('organization not found');

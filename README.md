@@ -70,6 +70,15 @@ MultiPolygon, `[longitude, latitude]` positions within range, closed rings of
 at least 4 positions, no legacy `crs` member, and every position inside the
 service area (Ukraine) — which catches the classic `[lat, lng]` swap.
 Boundaries are stored as `MultiPolygon` and returned with 6 decimals (~11 cm).
+
+Then PostGIS checks the geometry itself (`BoundaryService`, one query):
+repeated points are dropped, a self-intersecting outline (a "bow tie", a spike)
+is repaired with `ST_MakeValid` into the parts it encloses, rings are turned
+counter-clockwise (RFC 7946), and the answer lists what was changed in
+`warnings`. A hole outside its shell, an outline that encloses nothing and a
+field under 100 m² are rejected with 422 — repairing those would invent land.
+A `CHECK (ST_IsValid(geom))` constraint keeps invalid boundaries out of the
+table whatever writes to it.
 Responses use `application/geo+json`; requests may use it or `application/json`.
 
 ```bash
@@ -119,7 +128,7 @@ docs/           query notes, EXPLAIN plans
 
 - [x] M0 — project skeleton: NestJS + Fastify, Docker PostGIS, TypeORM migrations
 - [x] M1 — GeoJSON in / out: `fields` table, create and read Features and FeatureCollections
-- [ ] M2 — geometry validation and repair (`ST_IsValid`, `ST_MakeValid`)
+- [x] M2 — geometry validation and repair (`ST_IsValid`, `ST_MakeValid`)
 - [ ] M3 — measurements: area, perimeter, label point; geometry vs geography
 - [ ] M4 — viewport queries, GiST index, simplification by zoom, extent
 - [ ] M5 — overlap detection between fields
