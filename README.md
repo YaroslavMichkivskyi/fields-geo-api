@@ -63,6 +63,25 @@ a metric projection (UTM 35N / 36N for Ukraine) where a planar operation is need
 | `GET` | `/tiles/:z/:x/:y.mvt` | Mapbox Vector Tiles of fields (`ST_AsMVT`) |
 
 The organisation is taken from the `x-org-id` header; every query is scoped to it.
+A field of another organisation answers 404, not 403, so its existence does not leak.
+
+Input is validated before it reaches the database: a Feature with a Polygon or
+MultiPolygon, `[longitude, latitude]` positions within range, closed rings of
+at least 4 positions, no legacy `crs` member, and every position inside the
+service area (Ukraine) — which catches the classic `[lat, lng]` swap.
+Boundaries are stored as `MultiPolygon` and returned with 6 decimals (~11 cm).
+Responses use `application/geo+json`; requests may use it or `application/json`.
+
+```bash
+curl -X POST localhost:3000/fields \
+  -H 'x-org-id: 00000000-0000-0000-0000-000000000001' \
+  -H 'content-type: application/geo+json' \
+  -d '{"type":"Feature","properties":{"name":"North field","crop":"wheat"},
+       "geometry":{"type":"Polygon","coordinates":[[[34.55,49.59],[34.559,49.59],
+       [34.559,49.5935],[34.55,49.5935],[34.55,49.59]]]}}'
+```
+
+The id above is the "Demo farm" organisation created by the migrations.
 
 ## Running locally
 
@@ -99,7 +118,7 @@ docs/           query notes, EXPLAIN plans
 ## Roadmap
 
 - [x] M0 — project skeleton: NestJS + Fastify, Docker PostGIS, TypeORM migrations
-- [ ] M1 — GeoJSON in / out: `fields` table, create and read Features and FeatureCollections
+- [x] M1 — GeoJSON in / out: `fields` table, create and read Features and FeatureCollections
 - [ ] M2 — geometry validation and repair (`ST_IsValid`, `ST_MakeValid`)
 - [ ] M3 — measurements: area, perimeter, label point; geometry vs geography
 - [ ] M4 — viewport queries, GiST index, simplification by zoom, extent

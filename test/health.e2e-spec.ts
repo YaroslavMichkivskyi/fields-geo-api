@@ -1,15 +1,11 @@
-import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
-import { Test } from '@nestjs/testing';
-import { AppModule } from '../src/app.module';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
+import { createTestApp } from './app';
 
 describe('GET /health', () => {
   let app: NestFastifyApplication;
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-    app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
-    await app.init();
-    await app.getHttpAdapter().getInstance().ready();
+    ({ app } = await createTestApp());
   });
 
   afterAll(async () => {
