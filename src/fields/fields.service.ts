@@ -3,20 +3,28 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { BoundaryService } from '../geo/boundary.service';
 import type { FieldFeatureInput } from '../geo/geojson.schema';
+import { toleranceForZoom } from '../geo/viewport';
 
 /** 6 decimals of a degree ~ 11 cm: more is noise from GPS and float maths. */
 const PRECISION = 6;
+
+/** At most this many Features per answer; a wider view needs vector tiles (M10). */
+export const MAX_FEATURES = 5000;
 
 /**
  * One field row → one GeoJSON Feature, built by Postgres itself.
  * ST_AsGeoJSON turns the geometry into GeoJSON text; ::json embeds it as an
  * object instead of a quoted string.
+ *
+ * `geometry` is the SQL expression drawn: the stored boundary or a simplified
+ * one. Measurements always use the stored f.geom. Only constant SQL from this
+ * file is passed here, never request data.
  */
-const FEATURE_SQL = `
+const featureSql = (geometry = 'f.geom') => `
   json_build_object(
     'type', 'Feature',
     'id', f.id,
-    'geometry', ST_AsGeoJSON(f.geom, ${PRECISION})::json,
+    'geometry', ST_AsGeoJSON(${geometry}, ${PRECISION})::json,
     'properties', json_build_object(
       'name', f.name,
       'crop', f.crop,
@@ -54,6 +62,18 @@ export interface CreatedFeature extends Feature {
 export interface FeatureCollection {
   type: 'FeatureCollection';
   features: Feature[];
+  /** true when more than MAX_FEATURES matched and the rest was cut off */
+  truncated: boolean;
+}
+
+export interface Viewport {
+  bbox?: [minLng: number, minLat: number, maxLng: number, maxLat: number];
+  zoom?: number;
+}
+
+/** GeoJSON bbox order: [west, south, east, north]; null when there is nothing. */
+export interface Extent {
+  bbox: [number, number, number, number] | null;
 }
 
 const FK_VIOLATION = '23503';
@@ -87,7 +107,7 @@ export class FieldsService {
 
   async findOne(orgId: string, id: string): Promise<Feature> {
     const [row] = await this.db.query<{ feature: Feature }[]>(
-      `SELECT ${FEATURE_SQL} AS feature FROM fields f WHERE f.id = $1 AND f.org_id = $2`,
+      `SELECT ${featureSql()} AS feature FROM fields f WHERE f.id = $1 AND f.org_id = $2`,
       [id, orgId],
     );
     // another organisation's field is "not found", not "forbidden": don't leak that it exists
@@ -95,17 +115,61 @@ export class FieldsService {
     return row.feature;
   }
 
-  /** The whole collection is aggregated in SQL: one row, no mapping loop in Node. */
-  async list(orgId: string): Promise<FeatureCollection> {
+  /**
+   * Fields of the organisation, optionally only those in the map viewport and
+   * simplified for its zoom. Aggregated in SQL: one row, no mapping loop in Node.
+   */
+  async list(orgId: string, view: Viewport = {}): Promise<FeatureCollection> {
+    const params: unknown[] = [orgId];
+
+    // `&&` = bounding boxes overlap: answered from the GiST index alone. For a
+    // viewport that is exact enough — a field whose box touches the screen
+    // edge is sent although its outline is just outside.
+    let inView = '';
+    if (view.bbox) {
+      params.push(...view.bbox);
+      inView = 'AND f.geom && ST_MakeEnvelope($2, $3, $4, $5, 4326)';
+    }
+
+    let drawn = 'f.geom';
+    if (view.zoom !== undefined) {
+      params.push(toleranceForZoom(view.zoom));
+      // keeps every ring valid and every field present, only drops vertices;
+      // it may hand back a single-part Polygon, ST_Multi keeps the answer's type stable
+      drawn = `ST_Multi(ST_SimplifyPreserveTopology(f.geom, $${params.length}))`;
+    }
+
+    params.push(MAX_FEATURES + 1); // one extra row tells whether we cut anything off
+    const limit = `$${params.length}`;
+
     const [row] = await this.db.query<{ collection: FeatureCollection }[]>(
       `SELECT json_build_object(
                 'type', 'FeatureCollection',
-                'features', COALESCE(json_agg(${FEATURE_SQL} ORDER BY f.created_at, f.id), '[]'::json)
+                'features', COALESCE(
+                    json_agg(${featureSql(drawn)} ORDER BY f.created_at, f.id) FILTER (WHERE f.n <= ${MAX_FEATURES}),
+                    '[]'::json),
+                'truncated', count(*) > ${MAX_FEATURES}
               ) AS collection
-         FROM fields f
-        WHERE f.org_id = $1`,
-      [orgId],
+         FROM (SELECT f.*, row_number() OVER (ORDER BY f.created_at, f.id) AS n
+                 FROM fields f
+                WHERE f.org_id = $1 ${inView}
+                ORDER BY f.created_at, f.id
+                LIMIT ${limit}) f`,
+      params,
     );
     return row.collection;
+  }
+
+  /** The box around all fields of the organisation: "zoom to my fields". */
+  async extent(orgId: string): Promise<Extent> {
+    const [row] = await this.db.query<{ bbox: Extent['bbox'] }[]>(
+      `SELECT CASE WHEN e IS NULL THEN NULL
+                   ELSE json_build_array(round(ST_XMin(e)::numeric, ${PRECISION}), round(ST_YMin(e)::numeric, ${PRECISION}),
+                                         round(ST_XMax(e)::numeric, ${PRECISION}), round(ST_YMax(e)::numeric, ${PRECISION}))
+              END AS bbox
+         FROM (SELECT ST_Extent(geom) AS e FROM fields WHERE org_id = $1) t`,
+      [orgId],
+    );
+    return { bbox: row.bbox };
   }
 }

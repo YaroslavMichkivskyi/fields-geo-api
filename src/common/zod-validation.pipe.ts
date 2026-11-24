@@ -3,7 +3,10 @@ import type { ZodType } from 'zod';
 
 /** Validates a request part with a Zod schema; 400 lists every problem with its JSON path. */
 export class ZodValidationPipe<T> implements PipeTransform<unknown, T> {
-  constructor(private readonly schema: ZodType<T>) {}
+  constructor(
+    private readonly schema: ZodType<T, any, any>,
+    private readonly message = 'Invalid GeoJSON',
+  ) {}
 
   transform(value: unknown): T {
     const result = this.schema.safeParse(value);
@@ -11,7 +14,7 @@ export class ZodValidationPipe<T> implements PipeTransform<unknown, T> {
     throw new BadRequestException({
       statusCode: 400,
       error: 'Bad Request',
-      message: 'Invalid GeoJSON',
+      message: this.message,
       issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
     });
   }

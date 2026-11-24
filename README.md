@@ -85,6 +85,14 @@ generated column, measured on the WGS 84 spheroid), `perimeterM` and
 `labelPoint` (a point guaranteed inside the field, for the map label).
 Why the spheroid and not degrees, Web Mercator or Turf:
 [docs/measurements.md](docs/measurements.md).
+
+The map asks for its viewport: `GET /fields?bbox=…&zoom=…` returns the fields
+whose bounding box overlaps the screen (`&&`, answered from the GiST index),
+with boundaries simplified to half a screen pixel for the zoom level
+(`ST_SimplifyPreserveTopology`); measurements still describe the real
+boundary. At most 5 000 Features per answer, `truncated: true` when cut off.
+Plans and response sizes on 50 000 seeded fields:
+[docs/explain.md](docs/explain.md).
 Responses use `application/geo+json`; requests may use it or `application/json`.
 
 ```bash
@@ -109,10 +117,10 @@ npm run start:dev             # http://localhost:3000/health
 npm test                      # migrates the test database, then e2e tests (Fastify inject)
 ```
 
-Seed data (synthetic fields, samples and rivers around the Poltava region)
-arrives with M4 as `npm run seed`.
-
 ```bash
+npm run seed                  # 50 000 synthetic fields around the Poltava region (Demo farm)
+npm run explain:viewport      # EXPLAIN ANALYZE of the viewport query, with / without the index
+npm run compare:area          # one area measured six ways
 npm run migration:revert      # undo the last migration
 ```
 
@@ -136,7 +144,7 @@ docs/           query notes, EXPLAIN plans
 - [x] M1 — GeoJSON in / out: `fields` table, create and read Features and FeatureCollections
 - [x] M2 — geometry validation and repair (`ST_IsValid`, `ST_MakeValid`)
 - [x] M3 — measurements: area, perimeter, label point; geometry vs geography
-- [ ] M4 — viewport queries, GiST index, simplification by zoom, extent
+- [x] M4 — viewport queries, GiST index, simplification by zoom, extent
 - [ ] M5 — overlap detection between fields
 - [ ] M6 — proximity: radius search and nearest-N (KNN)
 - [ ] M7 — soil samples: point-in-polygon join and stats

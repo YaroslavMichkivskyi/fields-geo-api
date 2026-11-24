@@ -162,7 +162,7 @@ describe('fields: GeoJSON in / out', () => {
 
       expect(mine.type).toBe('FeatureCollection');
       expect(mine.features.map((f: { properties: { name: string } }) => f.properties.name)).toEqual(['one', 'two']);
-      expect(theirs).toEqual({ type: 'FeatureCollection', features: [] });
+      expect(theirs).toEqual({ type: 'FeatureCollection', features: [], truncated: false });
     });
   });
 });
