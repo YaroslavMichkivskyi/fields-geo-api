@@ -21,6 +21,11 @@ const FEATURE_SQL = `
       'name', f.name,
       'crop', f.crop,
       'season', f.season,
+      -- measured on the spheroid: geography gives metres, geometry in 4326 would give degrees
+      'areaHa', f.area_ha,
+      'perimeterM', round(ST_Perimeter(f.geom::geography)::numeric, 1),
+      -- a point guaranteed to lie inside the field (the centroid of a C-shape does not)
+      'labelPoint', ST_AsGeoJSON(ST_PointOnSurface(f.geom), ${PRECISION})::json -> 'coordinates',
       'createdAt', f.created_at
     )
   )`;
@@ -29,7 +34,16 @@ export interface Feature {
   type: 'Feature';
   id: string;
   geometry: { type: 'MultiPolygon'; coordinates: number[][][][] };
-  properties: { name: string; crop: string | null; season: number | null; createdAt: string };
+  properties: {
+    name: string;
+    crop: string | null;
+    season: number | null;
+    areaHa: number;
+    perimeterM: number;
+    /** [lng, lat] inside the field, for the map label */
+    labelPoint: [number, number];
+    createdAt: string;
+  };
 }
 
 /** POST answer: the stored Feature plus what was repaired on the way (RFC 7946 foreign member). */

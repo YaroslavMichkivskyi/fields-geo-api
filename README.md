@@ -79,6 +79,12 @@ counter-clockwise (RFC 7946), and the answer lists what was changed in
 field under 100 m² are rejected with 422 — repairing those would invent land.
 A `CHECK (ST_IsValid(geom))` constraint keeps invalid boundaries out of the
 table whatever writes to it.
+
+Every Feature carries its measurements in `properties`: `areaHa` (a stored
+generated column, measured on the WGS 84 spheroid), `perimeterM` and
+`labelPoint` (a point guaranteed inside the field, for the map label).
+Why the spheroid and not degrees, Web Mercator or Turf:
+[docs/measurements.md](docs/measurements.md).
 Responses use `application/geo+json`; requests may use it or `application/json`.
 
 ```bash
@@ -129,7 +135,7 @@ docs/           query notes, EXPLAIN plans
 - [x] M0 — project skeleton: NestJS + Fastify, Docker PostGIS, TypeORM migrations
 - [x] M1 — GeoJSON in / out: `fields` table, create and read Features and FeatureCollections
 - [x] M2 — geometry validation and repair (`ST_IsValid`, `ST_MakeValid`)
-- [ ] M3 — measurements: area, perimeter, label point; geometry vs geography
+- [x] M3 — measurements: area, perimeter, label point; geometry vs geography
 - [ ] M4 — viewport queries, GiST index, simplification by zoom, extent
 - [ ] M5 — overlap detection between fields
 - [ ] M6 — proximity: radius search and nearest-N (KNN)

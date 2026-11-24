@@ -3,7 +3,7 @@ import { DataSource } from 'typeorm';
 import { createTestApp } from './app';
 
 /**
- * A ~40 ha field near Poltava, [lng, lat], exterior ring counter-clockwise
+ * A ~25 ha field near Poltava, [lng, lat], exterior ring counter-clockwise
  * and closed (the last position repeats the first).
  */
 const POLTAVA_FIELD = [
