@@ -56,6 +56,7 @@ a metric projection (UTM 35N / 36N for Ukraine) where a planar operation is need
 | `GET` | `/fields/:id/overlaps` | fields of the same organisation overlapping this one, with the overlap geometry and area |
 | `GET` | `/fields/near?lng=&lat=&radius_km=` / `&limit=` | fields within a radius / the N nearest, with distances in metres |
 | `GET` | `/fields/extent` | bounding box of all fields of the organisation ("zoom to my fields") |
+| `GET` | `/fields/overlaps` | every overlapping pair of fields of the organisation once, biggest overlap first |
 | `POST` | `/soil-samples` | batch of sample points; each is assigned to the field that covers it |
 | `GET` | `/fields/:id/soil-stats` | aggregates of the samples inside a field |
 | `GET` | `/fields/:id/water-zones?buffer_m=50` | part of the field inside the protection zone of nearby water and the remaining sprayable area |
@@ -93,6 +94,15 @@ with boundaries simplified to half a screen pixel for the zoom level
 boundary. At most 5 000 Features per answer, `truncated: true` when cut off.
 Plans and response sizes on 50 000 seeded fields:
 [docs/explain.md](docs/explain.md).
+Two fields overlap when their interiors share land: `ST_Intersects AND NOT
+ST_Touches` (neighbours along a common boundary do not count), and the overlap
+is larger than GPS noise — over 10 m² and over 0.5 % of the smaller field. A
+`POST` answer lists the existing fields the new one overlaps (`overlaps`, a
+warning, not an error); `GET /fields/:id/overlaps` returns each overlap as a
+MultiPolygon with its area and share of both fields; `GET /fields/overlaps`
+is the organisation-wide report (a spatial self-join). Why the database does
+not forbid overlaps: [docs/explain.md](docs/explain.md#why-not-forbid-overlaps-in-the-database).
+
 Responses use `application/geo+json`; requests may use it or `application/json`.
 
 ```bash
@@ -145,7 +155,7 @@ docs/           query notes, EXPLAIN plans
 - [x] M2 — geometry validation and repair (`ST_IsValid`, `ST_MakeValid`)
 - [x] M3 — measurements: area, perimeter, label point; geometry vs geography
 - [x] M4 — viewport queries, GiST index, simplification by zoom, extent
-- [ ] M5 — overlap detection between fields
+- [x] M5 — overlap detection between fields
 - [ ] M6 — proximity: radius search and nearest-N (KNN)
 - [ ] M7 — soil samples: point-in-polygon join and stats
 - [ ] M8 — water protection zones: buffers, intersection, difference

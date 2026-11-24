@@ -83,3 +83,57 @@ seen at that zoom: 10× fewer vertices at zoom 9, every field still present as
 a closed ring (at zoom 7 each field is down to 5 vertices). Beyond a few
 thousand fields GeoJSON is the wrong format whatever the simplification — that
 is what vector tiles are for (M10).
+
+# Overlap report: a spatial self-join
+
+`GET /fields/overlaps` joins `fields` to itself: every pair (a, b) of one
+organisation whose interiors overlap, each pair once (`a.id < b.id`). On the
+same 50 000 seeded circles (random centres, so many of them overlap):
+
+```sql
+SELECT count(*)
+  FROM fields a
+  JOIN fields b ON b.org_id = a.org_id AND a.id < b.id
+   AND ST_Intersects(a.geom, b.geom) AND NOT ST_Touches(a.geom, b.geom)
+ WHERE a.org_id = $1
+```
+
+```
+Nested Loop (actual time=161.337..861.462 rows=14136 loops=3)
+  ->  Parallel Seq Scan on fields a (rows=16667 loops=3)
+  ->  Index Scan using fields_geom_gist on fields b (actual time=0.031..0.041 rows=1 loops=50000)
+        Index Cond: (geom && a.geom)
+        Filter: (org_id = … AND (a.id < id) AND st_intersects(a.geom, geom) AND (NOT st_touches(a.geom, geom)))
+        Rows Removed by Filter: 2
+Execution Time: 1117.832 ms
+```
+
+- **Nested Loop + Index Scan** — for each of the 50 000 fields a, the GiST
+  index finds the few fields b whose boxes touch a's box (`Index Cond: geom && a.geom`
+  — `ST_Intersects` adds that box test by itself, which is why it can use the index).
+  Without the index this would be 50 000 × 50 000 = 2.5 · 10⁹ exact tests.
+- **Filter** — the exact tests run only on those candidates: ~3 per field.
+  `a.id < b.id` throws away half of them: (A, B) and (B, A) are one pair, and
+  (A, A) is not a pair at all.
+- **Parallel** — 2 workers split the outer scan.
+
+42 409 pairs share interior points; computing `ST_Intersection` and its area
+for each and applying the noise thresholds (> 10 m² and > 0.5 % of the
+smaller field) leaves 40 714 real overlaps, the whole query 3.3 s. The
+intersection, not the join, is the expensive part — so the report is capped at
+5 000 pairs, biggest first, with `truncated`. For a real organisation (hundreds
+of fields, few overlaps) it is milliseconds.
+
+## Why not forbid overlaps in the database
+
+`EXCLUDE USING gist (org_id WITH =, geom WITH &&)` (with `btree_gist`) is the
+natural tool for "no two rows may overlap" — but an exclusion constraint
+compares with an *operator*, and the only spatial one GiST supports there is
+`&&`, the box test. It would reject two neighbouring fields whose boxes
+overlap while the fields only share a boundary — nearly every pair of
+neighbours. Exact rules (`ST_Overlaps`, an area threshold) need a trigger,
+which costs every insert a query and still races between concurrent
+transactions unless the table is locked. And an overlap is often a fact to
+resolve with people (two farms claim the same land, a lease changed hands),
+not an input error — so the API warns (`overlaps` in the `POST` answer) and
+reports, and does not refuse.

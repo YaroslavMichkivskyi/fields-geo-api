@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 import { BoundaryService } from '../geo/boundary.service';
 import type { FieldFeatureInput } from '../geo/geojson.schema';
 import { toleranceForZoom } from '../geo/viewport';
+import { OverlapsService } from './overlaps.service';
 
 /** 6 decimals of a degree ~ 11 cm: more is noise from GPS and float maths. */
 const PRECISION = 6;
@@ -54,9 +55,14 @@ export interface Feature {
   };
 }
 
-/** POST answer: the stored Feature plus what was repaired on the way (RFC 7946 foreign member). */
+/**
+ * POST answer: the stored Feature plus what was repaired on the way and which
+ * existing fields it overlaps (RFC 7946 foreign members). An overlap is a
+ * warning, not an error: two farms may really claim the same land.
+ */
 export interface CreatedFeature extends Feature {
   warnings: string[];
+  overlaps: { id: string; name: string; overlapHa: number }[];
 }
 
 export interface FeatureCollection {
@@ -83,6 +89,7 @@ export class FieldsService {
   constructor(
     @InjectDataSource() private readonly db: DataSource,
     private readonly boundary: BoundaryService,
+    private readonly overlaps: OverlapsService,
   ) {}
 
   async create(orgId: string, input: FieldFeatureInput): Promise<CreatedFeature> {
@@ -96,7 +103,9 @@ export class FieldsService {
          RETURNING id`,
         [orgId, name, crop ?? null, season ?? null, ewkb],
       );
-      return { ...(await this.findOne(orgId, row.id)), warnings };
+      const { features } = await this.overlaps.ofField(orgId, row.id);
+      const overlaps = features.map(({ properties: p }) => ({ id: p.fieldId, name: p.name, overlapHa: p.overlapHa }));
+      return { ...(await this.findOne(orgId, row.id)), warnings, overlaps };
     } catch (e) {
       if ((e as { code?: string }).code === FK_VIOLATION) {
         throw new NotFoundException('organization not found');
