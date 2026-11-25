@@ -137,3 +137,62 @@ transactions unless the table is locked. And an overlap is often a fact to
 resolve with people (two farms claim the same land, a lease changed hands),
 not an input error — so the API warns (`overlaps` in the `POST` answer) and
 reports, and does not refuse.
+
+# Proximity: within a radius, the N nearest
+
+`npm run explain:near` on the 50 000 seeded fields: a point in Poltava
+(34.55, 49.59), radius 5 km — 72 fields. The long hex literal of the point is
+shortened to `<point>`.
+
+| query | plan | rows read | time |
+|---|---|---|---|
+| `ST_Distance(geom::geography, p) < 5000` | Parallel Seq Scan | 50 000 | 712 ms |
+| `ST_DWithin(geom::geography, p, 5000)`, only the GiST on `geom` | Parallel Seq Scan | 50 000 | 766 ms |
+| `ST_DWithin(geom::geography, p, 5000)` + index on `(geom::geography)` | Bitmap Index Scan | 145 | **5.8 ms** |
+| the same on a stored `geog` column + its index | Bitmap Index Scan | 145 | 4.8 ms |
+| `ORDER BY geom::geography <-> p LIMIT 5` | Index Scan, `Order By` | 5 | **0.3 ms** |
+
+**`ST_Distance < r` never uses an index.** It is a function computed for a
+row and then compared: the planner sees an arbitrary expression. `ST_DWithin`
+is written so that PostGIS adds an index condition of its own:
+
+```
+Index Cond: ((geom)::geography && _st_expand('<point>'::geography, '5000'::double precision))
+Filter:     st_dwithin((geom)::geography, '<point>'::geography, '5000'::double precision, true)
+```
+
+The point's box grown by 5 km (`_st_expand`) is tested against the boxes in
+the index (145 candidates), then the exact distance runs on those only
+(72 kept, `Rows Removed by Filter: 73`).
+
+**An index serves one expression.** The GiST index on `geom` stays unused
+by `ST_DWithin(geom::geography, …)`: the query tests a different expression
+(`geom::geography`) and a different operator class (geography, on the
+sphere). Two ways to give it an index:
+
+| | table | geography index |
+|---|---|---|
+| expression index | 65 MB | 3560 kB |
+| stored column + index | 131 MB | 3520 kB |
+
+- **expression index** `CREATE INDEX … USING GIST ((geom::geography))` — the
+  index is the same size, the table is unchanged; the query must spell the
+  expression exactly as the index does, and the cast runs again for each
+  candidate row (the 1 ms difference above);
+- **stored column** `geog geography GENERATED ALWAYS AS (geom::geography) STORED`
+  — no cast at query time, simpler queries, but every boundary is stored
+  twice: the table doubles, and so do backup, replication and cache
+  pressure.
+
+The API takes the expression index: 1 ms per query is not worth 65 MB of
+duplicate data per 50 000 fields.
+
+**KNN** — `ORDER BY a <-> b LIMIT n` is answered by walking the GiST tree
+nearest box first (`Order By` in the Index Scan): 11 pages read and the scan
+stops after 5 rows, whatever the size of the table. It must be the
+**geography** operator: `<->` on `geometry` in SRID 4326 measures degrees,
+and here a degree of longitude is 72 km while a degree of latitude is 111 km —
+`test/near.e2e-spec.ts` has a field 3.6 km east (0.05°) that geometry KNN
+ranks behind a field 4.4 km north (0.04°). Geography `<->` orders on the
+sphere; the `distanceM` returned is `ST_Distance` on the spheroid (a few
+tenths of a percent apart, never enough to reorder fields that matter).

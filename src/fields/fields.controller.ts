@@ -2,6 +2,7 @@ import { Body, Controller, Get, Header, Param, ParseUUIDPipe, Post, Query } from
 import { OrgId } from '../common/org-id.decorator';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { fieldFeature, FieldFeatureInput } from '../geo/geojson.schema';
+import { nearQuery, NearQuery } from '../geo/near';
 import { viewportQuery, ViewportQuery } from '../geo/viewport';
 import { CreatedFeature, Extent, Feature, FeatureCollection, FieldsService } from './fields.service';
 import { Collection, FieldOverlap, OverlapPair, OverlapsService } from './overlaps.service';
@@ -34,7 +35,7 @@ export class FieldsController {
     return this.fields.list(orgId, query);
   }
 
-  // declared before ':id' so that "extent" / "overlaps" are never read as an id
+  // declared before ':id' so that "extent" / "overlaps" / "near" are never read as an id
   @Get('extent')
   extent(@OrgId() orgId: string): Promise<Extent> {
     return this.fields.extent(orgId);
@@ -45,6 +46,16 @@ export class FieldsController {
   @Header('Content-Type', GEOJSON)
   overlapReport(@OrgId() orgId: string): Promise<Collection<OverlapPair>> {
     return this.overlaps.report(orgId);
+  }
+
+  /** Fields near a point or a warehouse, nearest first. */
+  @Get('near')
+  @Header('Content-Type', GEOJSON)
+  near(
+    @OrgId() orgId: string,
+    @Query(new ZodValidationPipe(nearQuery, 'Invalid query')) query: NearQuery,
+  ): Promise<FeatureCollection> {
+    return this.fields.near(orgId, query);
   }
 
   @Get(':id')

@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { dbOptions } from './database/db-options';
 import { FieldsModule } from './fields/fields.module';
 import { HealthController } from './health/health.controller';
+import { WarehousesModule } from './warehouses/warehouses.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { HealthController } from './health/health.controller';
       useFactory: () => dbOptions(process.env),
     }),
     FieldsModule,
+    WarehousesModule,
   ],
   controllers: [HealthController],
 })

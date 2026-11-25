@@ -17,7 +17,8 @@
     "test": "jest --config test/jest-e2e.json --runInBand",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "compare:area": "ts-node scripts/compare-area.ts",
-    "explain:viewport": "ts-node scripts/explain-viewport.ts"
+    "explain:viewport": "ts-node scripts/explain-viewport.ts",
+    "explain:near": "ts-node scripts/explain-near.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.11",
@@ -37,6 +38,7 @@
     "@nestjs/testing": "^11.2.11",
     "@turf/area": "^7.4.0",
     "@turf/helpers": "^7.4.0",
+    "@turf/point-to-line-distance": "^7.4.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.20.5",
     "@types/pg": "^8.23.1",

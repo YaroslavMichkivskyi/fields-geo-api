@@ -54,7 +54,8 @@ a metric projection (UTM 35N / 36N for Ukraine) where a planar operation is need
 | `GET` | `/fields?bbox=minLng,minLat,maxLng,maxLat&zoom=` | FeatureCollection of fields in the map viewport, simplified for the zoom level |
 | `GET` | `/fields/:id` | one field as a Feature (area, perimeter, label point) |
 | `GET` | `/fields/:id/overlaps` | fields of the same organisation overlapping this one, with the overlap geometry and area |
-| `GET` | `/fields/near?lng=&lat=&radius_km=` / `&limit=` | fields within a radius / the N nearest, with distances in metres |
+| `GET` | `/fields/near?lng=&lat=` or `?warehouse=` + `&radius_km=` / `&limit=` | fields within a radius / the N nearest, with distances in metres |
+| `POST` | `/warehouses` | a warehouse from a GeoJSON Feature (Point) |
 | `GET` | `/fields/extent` | bounding box of all fields of the organisation ("zoom to my fields") |
 | `GET` | `/fields/overlaps` | every overlapping pair of fields of the organisation once, biggest overlap first |
 | `POST` | `/soil-samples` | batch of sample points; each is assigned to the field that covers it |
@@ -103,6 +104,14 @@ MultiPolygon with its area and share of both fields; `GET /fields/overlaps`
 is the organisation-wide report (a spatial self-join). Why the database does
 not forbid overlaps: [docs/explain.md](docs/explain.md#why-not-forbid-overlaps-in-the-database).
 
+`GET /fields/near` measures from a point or a warehouse to the nearest edge
+of each field, in metres on the spheroid (0 when the point is inside):
+`radius_km` gives every field within it (`ST_DWithin`), `limit` the N nearest
+(KNN, `<->` walking the index), both together the N nearest within the radius.
+Both are answered from a GiST index on `geom::geography`; why that and not
+`ST_Distance < r`, nor a second geography column:
+[docs/explain.md](docs/explain.md#proximity-within-a-radius-the-n-nearest).
+
 Responses use `application/geo+json`; requests may use it or `application/json`.
 
 ```bash
@@ -130,6 +139,7 @@ npm test                      # migrates the test database, then e2e tests (Fast
 ```bash
 npm run seed                  # 50 000 synthetic fields around the Poltava region (Demo farm)
 npm run explain:viewport      # EXPLAIN ANALYZE of the viewport query, with / without the index
+npm run explain:near          # radius and nearest-N queries, written several ways
 npm run compare:area          # one area measured six ways
 npm run migration:revert      # undo the last migration
 ```
@@ -156,7 +166,7 @@ docs/           query notes, EXPLAIN plans
 - [x] M3 — measurements: area, perimeter, label point; geometry vs geography
 - [x] M4 — viewport queries, GiST index, simplification by zoom, extent
 - [x] M5 — overlap detection between fields
-- [ ] M6 — proximity: radius search and nearest-N (KNN)
+- [x] M6 — proximity: radius search and nearest-N (KNN)
 - [ ] M7 — soil samples: point-in-polygon join and stats
 - [ ] M8 — water protection zones: buffers, intersection, difference
 - [ ] M9 — bulk import of a FeatureCollection

@@ -104,3 +104,26 @@ export const fieldFeature = z
     }
   });
 export type FieldFeatureInput = z.infer<typeof fieldFeature>;
+
+/** POST /warehouses body: a Feature with a Point. */
+export const warehouseFeature = z
+  .object({
+    type: z.literal('Feature'),
+    geometry: z.object({ type: z.literal('Point', { message: 'geometry type must be Point' }), coordinates: position }),
+    properties: z.object({ name: z.string().trim().min(1).max(200) }),
+  })
+  .passthrough()
+  .superRefine((feature, ctx) => {
+    if ('crs' in feature) {
+      ctx.addIssue({ code: 'custom', path: ['crs'], message: '"crs" is not supported: GeoJSON is always WGS 84' });
+    }
+    const [lng, lat] = feature.geometry.coordinates;
+    if (!inServiceArea(lng, lat)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['geometry', 'coordinates'],
+        message: `position [${lng}, ${lat}] is outside the service area (Ukraine); GeoJSON order is [longitude, latitude] - were they swapped?`,
+      });
+    }
+  });
+export type WarehouseFeatureInput = z.infer<typeof warehouseFeature>;

@@ -3,6 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { BoundaryService } from '../geo/boundary.service';
 import type { FieldFeatureInput } from '../geo/geojson.schema';
+import type { NearQuery } from '../geo/near';
 import { toleranceForZoom } from '../geo/viewport';
 import { OverlapsService } from './overlaps.service';
 
@@ -18,10 +19,11 @@ export const MAX_FEATURES = 5000;
  * object instead of a quoted string.
  *
  * `geometry` is the SQL expression drawn: the stored boundary or a simplified
- * one. Measurements always use the stored f.geom. Only constant SQL from this
- * file is passed here, never request data.
+ * one. Measurements always use the stored f.geom. `extra` appends properties
+ * (`, 'key', <sql>`). Only constant SQL from this file is passed here, never
+ * request data.
  */
-const featureSql = (geometry = 'f.geom') => `
+const featureSql = (geometry = 'f.geom', extra = '') => `
   json_build_object(
     'type', 'Feature',
     'id', f.id,
@@ -35,7 +37,7 @@ const featureSql = (geometry = 'f.geom') => `
       'perimeterM', round(ST_Perimeter(f.geom::geography)::numeric, 1),
       -- a point guaranteed to lie inside the field (the centroid of a C-shape does not)
       'labelPoint', ST_AsGeoJSON(ST_PointOnSurface(f.geom), ${PRECISION})::json -> 'coordinates',
-      'createdAt', f.created_at
+      'createdAt', f.created_at${extra}
     )
   )`;
 
@@ -75,6 +77,13 @@ export interface FeatureCollection {
 export interface Viewport {
   bbox?: [minLng: number, minLat: number, maxLng: number, maxLat: number];
   zoom?: number;
+}
+
+export interface NearFeature extends Feature {
+  properties: Feature['properties'] & {
+    /** metres from the point to the nearest edge of the field, 0 when the point is inside */
+    distanceM: number;
+  };
 }
 
 /** GeoJSON bbox order: [west, south, east, north]; null when there is nothing. */
@@ -167,6 +176,55 @@ export class FieldsService {
       params,
     );
     return row.collection;
+  }
+
+  /**
+   * Fields near a point or a warehouse, nearest first, with the distance in
+   * metres: all within a radius, the N nearest, or the N nearest within it.
+   */
+  async near(orgId: string, q: NearQuery): Promise<FeatureCollection & { features: NearFeature[] }> {
+    let from = q.from;
+    if ('warehouse' in from) {
+      const [w] = await this.db.query<{ lng: number; lat: number }[]>(
+        'SELECT ST_X(geom) AS lng, ST_Y(geom) AS lat FROM warehouses WHERE id = $1 AND org_id = $2',
+        [from.warehouse, orgId],
+      );
+      if (!w) throw new NotFoundException('warehouse not found');
+      from = w;
+    }
+
+    const params: unknown[] = [orgId, from.lng, from.lat];
+    // the point as geography: every distance below is in metres on the spheroid
+    const here = 'ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography';
+    // the same expression as the index fields_geog_gist, or the index is not used
+    const geog = 'f.geom::geography';
+
+    let within = '';
+    if (q.radiusM !== undefined) {
+      params.push(q.radiusM);
+      // index-assisted: the box of the point grown by the radius, then the exact distance;
+      // ST_Distance(...) < r would compute the distance for every row
+      within = `AND ST_DWithin(${geog}, ${here}, $${params.length})`;
+    }
+
+    // no limit asked: everything within the radius, capped like GET /fields
+    params.push((q.limit ?? MAX_FEATURES) + 1);
+    const rows = await this.db.query<{ feature: NearFeature }[]>(
+      `SELECT ${featureSql('f.geom', `, 'distanceM', round(ST_Distance(${geog}, ${here})::numeric, 1)`)} AS feature
+         FROM fields f
+        WHERE f.org_id = $1 ${within}
+        -- KNN: the index walks the tree nearest box first and stops after LIMIT rows
+        ORDER BY ${geog} <-> ${here}, f.id
+        LIMIT $${params.length}`,
+      params,
+    );
+    const cap = q.limit ?? MAX_FEATURES;
+    return {
+      type: 'FeatureCollection',
+      features: rows.slice(0, cap).map((r) => r.feature),
+      // N nearest were asked for and given: nothing was cut off
+      truncated: q.limit === undefined && rows.length > cap,
+    };
   }
 
   /** The box around all fields of the organisation: "zoom to my fields". */
