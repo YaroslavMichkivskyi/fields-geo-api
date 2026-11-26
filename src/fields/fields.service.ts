@@ -5,6 +5,7 @@ import { BoundaryService } from '../geo/boundary.service';
 import type { FieldFeatureInput } from '../geo/geojson.schema';
 import type { NearQuery } from '../geo/near';
 import { toleranceForZoom } from '../geo/viewport';
+import { SoilService } from '../soil/soil.service';
 import { OverlapsService } from './overlaps.service';
 
 /** 6 decimals of a degree ~ 11 cm: more is noise from GPS and float maths. */
@@ -65,6 +66,8 @@ export interface Feature {
 export interface CreatedFeature extends Feature {
   warnings: string[];
   overlaps: { id: string; name: string; overlapHa: number }[];
+  /** soil samples taken inside it earlier, which had no field until now */
+  adoptedSamples: number;
 }
 
 export interface FeatureCollection {
@@ -99,6 +102,7 @@ export class FieldsService {
     @InjectDataSource() private readonly db: DataSource,
     private readonly boundary: BoundaryService,
     private readonly overlaps: OverlapsService,
+    private readonly soil: SoilService,
   ) {}
 
   async create(orgId: string, input: FieldFeatureInput): Promise<CreatedFeature> {
@@ -106,15 +110,19 @@ export class FieldsService {
     // validated, repaired if needed, MultiPolygon in WGS 84 — or a 422
     const { ewkb, warnings } = await this.boundary.prepare(input.geometry);
     try {
-      const [row] = await this.db.query<{ id: string }[]>(
-        `INSERT INTO fields (org_id, name, crop, season, geom)
-         VALUES ($1, $2, $3, $4, $5::geometry)  -- hex EWKB -> geometry, SRID included
-         RETURNING id`,
-        [orgId, name, crop ?? null, season ?? null, ewkb],
-      );
-      const { features } = await this.overlaps.ofField(orgId, row.id);
+      // the field and the samples it adopts appear together or not at all
+      const { id, adoptedSamples } = await this.db.transaction(async (m) => {
+        const [row] = await m.query<{ id: string }[]>(
+          `INSERT INTO fields (org_id, name, crop, season, geom)
+           VALUES ($1, $2, $3, $4, $5::geometry)  -- hex EWKB -> geometry, SRID included
+           RETURNING id`,
+          [orgId, name, crop ?? null, season ?? null, ewkb],
+        );
+        return { id: row.id, adoptedSamples: await this.soil.assignToField(orgId, row.id, m) };
+      });
+      const { features } = await this.overlaps.ofField(orgId, id);
       const overlaps = features.map(({ properties: p }) => ({ id: p.fieldId, name: p.name, overlapHa: p.overlapHa }));
-      return { ...(await this.findOne(orgId, row.id)), warnings, overlaps };
+      return { ...(await this.findOne(orgId, id)), warnings, overlaps, adoptedSamples };
     } catch (e) {
       if ((e as { code?: string }).code === FK_VIOLATION) {
         throw new NotFoundException('organization not found');

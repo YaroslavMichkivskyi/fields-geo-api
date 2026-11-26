@@ -196,3 +196,53 @@ and here a degree of longitude is 72 km while a degree of latitude is 111 km —
 ranks behind a field 4.4 km north (0.04°). Geography `<->` orders on the
 sphere; the `distanceM` returned is `ST_Distance` on the spheroid (a few
 tenths of a percent apart, never enough to reorder fields that matter).
+
+# Point in polygon: placing soil samples in fields
+
+`POST /soil-samples` places every point of the batch in the field that covers
+it with a `LEFT JOIN LATERAL` — for each point, a subquery over `fields` that
+may refer to that point. On the 50 000 seeded fields, 1 000 random points
+across the region (372 of them land in a field):
+
+```sql
+SELECT pts.i, fld.id
+  FROM pts
+  LEFT JOIN LATERAL (
+    SELECT f.id FROM fields f
+     WHERE f.org_id = $1 AND ST_Covers(f.geom, pts.geom)
+     ORDER BY ST_Contains(f.geom, pts.geom) DESC, f.created_at, f.id
+     LIMIT 1) fld ON true
+```
+
+```
+Nested Loop Left Join (actual time=19.399..158.890 rows=1000 loops=1)
+  ->  Seq Scan on pts (rows=1000 loops=1)
+  ->  Limit (actual time=0.140..0.140 rows=0 loops=1000)
+        ->  Sort  Sort Key: (st_contains(f.geom, pts.geom)) DESC, f.created_at, f.id
+              ->  Index Scan using fields_geom_gist on fields f (actual time=0.120..0.138 rows=0 loops=1000)
+                    Index Cond: (geom ~ pts.geom)
+                    Filter: ((org_id = …) AND st_covers(geom, pts.geom))
+```
+
+- `ST_Covers` adds its own index condition, `geom ~ point` — "the field's box
+  contains the point" (`~` is the box-contains operator). The GiST index answers
+  it for each of the 1 000 points: ~0.14 ms per point, 2 885 pages for the whole
+  batch. Without the index it would be 1 000 × 50 000 exact tests.
+- `LEFT JOIN` keeps the points that fall in no field (`fld.id` is NULL);
+  `LIMIT 1` + `ORDER BY` picks one field when a point is covered by two — on a
+  shared boundary or where fields overlap: one that has the point strictly
+  inside (`ST_Contains`) wins over one that only has it on its edge, then the
+  oldest.
+
+**`ST_Covers` vs `ST_Contains`.** Both ask "is the point in the polygon", and
+differ only on the boundary: by DE-9IM, `Contains` needs the point to touch the
+polygon's *interior*, so a point exactly on the edge is not contained; `Covers`
+only needs it not to be outside. A sample is often taken on the track along
+the edge of a field — with `Contains` it would be lost.
+
+The field of a sample is stored (`soil_samples.field_id`), not recomputed on
+read: stats are a `GROUP BY` on an indexed column. When a field is drawn later
+around old samples, the same test runs the other way — `UPDATE soil_samples …
+FROM fields … WHERE ST_Covers(f.geom, s.geom) AND s.field_id IS NULL` — in the
+transaction that inserts the field, over a partial GiST index that holds only
+the samples still without a field.

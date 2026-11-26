@@ -60,6 +60,7 @@ a metric projection (UTM 35N / 36N for Ukraine) where a planar operation is need
 | `GET` | `/fields/overlaps` | every overlapping pair of fields of the organisation once, biggest overlap first |
 | `POST` | `/soil-samples` | batch of sample points; each is assigned to the field that covers it |
 | `GET` | `/fields/:id/soil-stats` | aggregates of the samples inside a field |
+| `GET` | `/soil-samples/unassigned` | samples that fell in no field, with the nearest field and the distance to it |
 | `GET` | `/fields/:id/water-zones?buffer_m=50` | part of the field inside the protection zone of nearby water and the remaining sprayable area |
 | `POST` | `/fields/import` | bulk import of a FeatureCollection with per-feature errors |
 | `GET` | `/tiles/:z/:x/:y.mvt` | Mapbox Vector Tiles of fields (`ST_AsMVT`) |
@@ -111,6 +112,15 @@ of each field, in metres on the spheroid (0 when the point is inside):
 Both are answered from a GiST index on `geom::geography`; why that and not
 `ST_Distance < r`, nor a second geography column:
 [docs/explain.md](docs/explain.md#proximity-within-a-radius-the-n-nearest).
+
+Soil samples arrive as a FeatureCollection of Points (date, pH, humus) and are
+stored in one statement: the batch travels as one JSON parameter, and every
+point is placed in the field that covers it (`ST_Covers`, so a sample on the
+boundary still counts; a field with the point strictly inside wins over one
+that only touches it). A field drawn later adopts the samples taken inside it
+before; samples in no field are listed with the nearest field and how far
+outside they are. Plan of the point-in-polygon join:
+[docs/explain.md](docs/explain.md#point-in-polygon-placing-soil-samples-in-fields).
 
 Responses use `application/geo+json`; requests may use it or `application/json`.
 
@@ -167,7 +177,7 @@ docs/           query notes, EXPLAIN plans
 - [x] M4 — viewport queries, GiST index, simplification by zoom, extent
 - [x] M5 — overlap detection between fields
 - [x] M6 — proximity: radius search and nearest-N (KNN)
-- [ ] M7 — soil samples: point-in-polygon join and stats
+- [x] M7 — soil samples: point-in-polygon join and stats
 - [ ] M8 — water protection zones: buffers, intersection, difference
 - [ ] M9 — bulk import of a FeatureCollection
 - [ ] M10 — vector tiles (`ST_AsMVT`)
