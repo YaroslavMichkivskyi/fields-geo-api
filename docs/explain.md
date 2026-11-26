@@ -246,3 +246,44 @@ around old samples, the same test runs the other way — `UPDATE soil_samples �
 FROM fields … WHERE ST_Covers(f.geom, s.geom) AND s.field_id IS NULL` — in the
 transaction that inserts the field, over a partial GiST index that holds only
 the samples still without a field.
+
+# Water protection zones: buffer, intersection, difference
+
+`GET /fields/:id/water-zones` splits a field into the part inside the
+protection strips of nearby rivers (no pesticides — Water Code of Ukraine,
+art. 88: 25 m for small rivers, 50 m medium, 100 m large) and the sprayable rest:
+
+```sql
+near AS (SELECT … FROM water_bodies w, f
+          WHERE ST_DWithin(w.geom::geography, f.geom::geography, 100)),      -- the widest strip
+zone AS (SELECT ST_Union(ST_Buffer(n.geom::geography, n.zone_m)::geometry) AS g
+           FROM near n WHERE n.distance_m <= n.zone_m),
+…  ST_Intersection(f.geom, zone.g)   -- under the strip
+…  ST_Difference(f.geom, zone.g)     -- sprayable
+```
+
+With 500 temporary rivers across the seeded region (inserted and rolled back),
+for a field a river crosses:
+
+```
+Index Scan using water_bodies_geog_gist on water_bodies w (actual time=6.422..6.588 rows=2 loops=1)
+  Index Cond: ((geom)::geography && _st_expand((f_1.geom)::geography, '100'::double precision))
+  Filter: (st_dwithin(…, '100'::double precision, true) AND (st_distance(…) <= (zone_m)::double precision))
+Execution Time: 14.272 ms
+```
+
+- The search distance is a **constant** (100 m, or `buffer_m`): only then can
+  `ST_DWithin` grow the field's box by it and ask the index. A per-row distance
+  (`zone_m` of each river) is applied afterwards, on the two candidates.
+- `ST_Buffer(geom::geography, 50)` is a strip of 50 **metres**: for geography
+  PostGIS projects the line to a suitable planar system, buffers there and
+  projects back. Checked against a hand calculation: a medium river 20 m from the
+  edge takes 3.3351 ha off the field, 30 m × the 1 112 m edge = 3.3366 ha.
+- `ST_Buffer(geom, 0.00045)` on geometry in 4326 buffers in **degrees**:
+  0.00045° is 50.0 m to the north but 32.5 m to the east here (a degree of
+  longitude is 72 km at this latitude, of latitude 111 km) — an ellipse, not a
+  strip (`test/water.e2e-spec.ts`).
+- Several rivers → `ST_Union` of their strips first, so where strips overlap
+  the area is not subtracted twice.
+- `ST_Difference` can split the field: a stream across the middle leaves a
+  MultiPolygon of two sprayable pieces.

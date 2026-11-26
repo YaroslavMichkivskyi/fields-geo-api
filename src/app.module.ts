@@ -5,6 +5,7 @@ import { dbOptions } from './database/db-options';
 import { FieldsModule } from './fields/fields.module';
 import { HealthController } from './health/health.controller';
 import { WarehousesModule } from './warehouses/warehouses.module';
+import { WaterModule } from './water/water.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { WarehousesModule } from './warehouses/warehouses.module';
     }),
     FieldsModule,
     WarehousesModule,
+    WaterModule,
   ],
   controllers: [HealthController],
 })

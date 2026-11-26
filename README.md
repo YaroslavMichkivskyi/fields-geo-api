@@ -62,6 +62,7 @@ a metric projection (UTM 35N / 36N for Ukraine) where a planar operation is need
 | `GET` | `/fields/:id/soil-stats` | aggregates of the samples inside a field |
 | `GET` | `/soil-samples/unassigned` | samples that fell in no field, with the nearest field and the distance to it |
 | `GET` | `/fields/:id/water-zones?buffer_m=50` | part of the field inside the protection zone of nearby water and the remaining sprayable area |
+| `POST` | `/water-bodies` | a river / stream / canal as a GeoJSON line, with its size class (reference data) |
 | `POST` | `/fields/import` | bulk import of a FeatureCollection with per-feature errors |
 | `GET` | `/tiles/:z/:x/:y.mvt` | Mapbox Vector Tiles of fields (`ST_AsMVT`) |
 
@@ -122,6 +123,15 @@ before; samples in no field are listed with the nearest field and how far
 outside they are. Plan of the point-in-polygon join:
 [docs/explain.md](docs/explain.md#point-in-polygon-placing-soil-samples-in-fields).
 
+No pesticides may be sprayed within the protection strip of water (Water Code
+of Ukraine, art. 88: 25 m along small rivers, 50 m medium, 100 m large).
+`GET /fields/:id/water-zones` buffers nearby rivers in metres
+(`ST_Buffer` on geography), unites the strips and splits the field into the
+restricted part (`ST_Intersection`) and the sprayable rest (`ST_Difference`),
+as map layers with their areas. `buffer_m` overrides the width. Why the buffer
+is never done in degrees:
+[docs/explain.md](docs/explain.md#water-protection-zones-buffer-intersection-difference).
+
 Responses use `application/geo+json`; requests may use it or `application/json`.
 
 ```bash
@@ -178,6 +188,6 @@ docs/           query notes, EXPLAIN plans
 - [x] M5 — overlap detection between fields
 - [x] M6 — proximity: radius search and nearest-N (KNN)
 - [x] M7 — soil samples: point-in-polygon join and stats
-- [ ] M8 — water protection zones: buffers, intersection, difference
+- [x] M8 — water protection zones: buffers, intersection, difference
 - [ ] M9 — bulk import of a FeatureCollection
 - [ ] M10 — vector tiles (`ST_AsMVT`)
