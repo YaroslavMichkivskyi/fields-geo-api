@@ -5,9 +5,7 @@ as points, rivers as lines. It accepts and returns **GeoJSON** (RFC 7946) and
 does all spatial work in **PostgreSQL + PostGIS**: validation and repair of
 drawn boundaries, areas in hectares, viewport queries for the map, overlap
 detection between fields, proximity search, point-in-field joins, buffer
-zones and bulk import.
-
-> Status: in progress — see [Roadmap](#roadmap).
+zones, bulk import and vector tiles for the map.
 
 ## Goal
 
@@ -64,7 +62,8 @@ a metric projection (UTM 35N / 36N for Ukraine) where a planar operation is need
 | `GET` | `/fields/:id/water-zones?buffer_m=50` | part of the field inside the protection zone of nearby water and the remaining sprayable area |
 | `POST` | `/water-bodies` | a river / stream / canal as a GeoJSON line, with its size class (reference data) |
 | `POST` | `/fields/import` | bulk import of a FeatureCollection with per-feature errors |
-| `GET` | `/tiles/:z/:x/:y.mvt` | Mapbox Vector Tiles of fields (`ST_AsMVT`) |
+| `GET` | `/tiles/:z/:x/:y.mvt` | Mapbox Vector Tiles of the fields (`ST_AsMVT`): polygons from zoom 10, clusters below |
+| `GET` | `/map?org=` | MapLibre page over the tiles, for trying them by hand |
 
 The organisation is taken from the `x-org-id` header; every query is scoped to it.
 A field of another organisation answers 404, not 403, so its existence does not leak.
@@ -141,6 +140,15 @@ fixed number of queries — one check of all boundaries, one INSERT, one UPDATE
 for the soil samples the new fields adopt. Conversion commands, the choice
 between the modes and timings: [docs/import.md](docs/import.md).
 
+For the map itself there are vector tiles: `GET /tiles/:z/:x/:y.mvt` is one
+query — `ST_TileEnvelope` → `ST_AsMVTGeom` (clip to the tile, snap to its
+4096 grid) → `ST_AsMVT` (protobuf). From zoom 10 a tile carries the field
+polygons; below it, where a field is a couple of pixels and a tile would be
+megabytes, it carries clusters (fields counted on a 32 × 32 grid per tile).
+Empty tiles answer 204, full ones carry an ETag. `GET /map` opens a MapLibre
+page over them. Sizes per zoom, and when to answer GeoJSON and when tiles:
+[docs/explain.md](docs/explain.md#vector-tiles-st_tileenvelope-st_asmvtgeom-st_asmvt).
+
 Responses use `application/geo+json`; requests may use it or `application/json`.
 
 ```bash
@@ -161,7 +169,7 @@ cp .env.example .env          # connection settings (Windows cmd: copy .env.exam
 docker compose up -d --wait   # PostGIS on localhost:5433 (dev + test databases)
 npm install
 npm run migration:run         # enables the postgis extension, then the schema
-npm run start:dev             # http://localhost:3000/health
+npm run start:dev             # http://localhost:3000/health, map: http://localhost:3000/map
 npm test                      # migrates the test database, then e2e tests (Fastify inject)
 ```
 
@@ -169,6 +177,7 @@ npm test                      # migrates the test database, then e2e tests (Fast
 npm run seed                  # 50 000 synthetic fields around the Poltava region (Demo farm)
 npm run explain:viewport      # EXPLAIN ANALYZE of the viewport query, with / without the index
 npm run explain:near          # radius and nearest-N queries, written several ways
+npm run explain:tiles         # size and time of a vector tile per zoom, polygons vs clusters
 npm run compare:area          # one area measured six ways
 npm run migration:revert      # undo the last migration
 ```
@@ -199,4 +208,4 @@ docs/           query notes, EXPLAIN plans
 - [x] M7 — soil samples: point-in-polygon join and stats
 - [x] M8 — water protection zones: buffers, intersection, difference
 - [x] M9 — bulk import of a FeatureCollection
-- [ ] M10 — vector tiles (`ST_AsMVT`)
+- [x] M10 — vector tiles (`ST_AsMVT`)

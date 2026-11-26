@@ -287,3 +287,86 @@ Execution Time: 14.272 ms
   the area is not subtracted twice.
 - `ST_Difference` can split the field: a stream across the middle leaves a
   MultiPolygon of two sprayable pieces.
+
+# Vector tiles: ST_TileEnvelope, ST_AsMVTGeom, ST_AsMVT
+
+`GET /tiles/:z/:x/:y.mvt` returns a Mapbox Vector Tile: protobuf, geometry
+already in the tile's own coordinates (0..4096), several layers, attributes
+per feature. One query does all of it:
+
+```sql
+WITH b AS (SELECT ST_TileEnvelope($2, $3, $4) AS env,                                  -- the tile in Web Mercator
+                  ST_Transform(ST_TileEnvelope($2, $3, $4, margin => 64.0/4096), 4326) AS q),  -- + buffer, in WGS 84
+t AS (
+  SELECT f.id, f.name, f.crop, f.season, f.area_ha::float8 AS "areaHa",
+         ST_AsMVTGeom(ST_Transform(f.geom, 3857), b.env, 4096, 64, true) AS geom   -- clip + snap to the 4096 grid
+    FROM fields f, b
+   WHERE f.org_id = $1 AND f.geom && b.q)                                         -- the GiST index on geom
+SELECT ST_AsMVT(t.*, 'fields', 4096, 'geom') FROM t WHERE t.geom IS NOT NULL       -- encode the layer
+```
+
+- **SRID 3857** (Web Mercator) is the projection of the tile pyramid;
+  geometry is stored in 4326, so it is transformed per feature — but the
+  filter compares the stored `geom` with the tile box turned into 4326, so
+  the index is used (the edges of a Mercator tile are meridians and
+  parallels, the box is exact in both systems).
+- `ST_AsMVTGeom` clips to the tile plus a **buffer** of 64 units (the outline
+  continues a little past the edge, so the stroke shows no seam where tiles
+  meet) and snaps every vertex to the 4096 grid — that is the simplification;
+  an outline that collapses below one cell comes back NULL and is dropped.
+- MVT feature ids must be integers; the uuid travels as a property `id`.
+- Empty tile → **204**; `Cache-Control: private, max-age=60` (tiles are per
+  organisation and change when a field is drawn) and an **ETag**, so a map
+  panning back revalidates with `If-None-Match` and gets 304.
+
+## Polygons only from zoom 10; clusters below
+
+One tile in the middle of the 50 000 seeded fields (`npm run explain:tiles`,
+best of 3, the database alone):
+
+| zoom | polygons: features | size | gzip | time | clusters: points | size | gzip | time |
+|---|---|---|---|---|---|---|---|---|
+| 6 | 24 802 | 3 170 KB | 1 360 KB | 534 ms | 167 | 5.0 KB | 2.2 KB | 246 ms |
+| 7 | 23 830 | 3 611 KB | 1 459 KB | 561 ms | 663 | 18.7 KB | 7.2 KB | 244 ms |
+| 8 | 10 135 | 1 682 KB | 696 KB | 320 ms | 1 029 | 28.2 KB | 10.8 KB | 112 ms |
+| 9 | 2 603 | 456 KB | 201 KB | 107 ms | 916 | 24.4 KB | 9.3 KB | 27 ms |
+| **10** | 668 | 122 KB | 60 KB | 41 ms | 463 | 12.2 KB | 4.6 KB | 9 ms |
+| 11 | 186 | 36 KB | 21 KB | 12 ms | 142 | 3.9 KB | 1.6 KB | 4 ms |
+| 12 | 50 | 9.6 KB | 7.0 KB | 4 ms | 41 | 1.1 KB | 0.6 KB | 2 ms |
+| 14 | 6 | 1.3 KB | 1.2 KB | 1 ms | 5 | 177 B | 151 B | 1 ms |
+| 16 | 4 | 478 B | 432 B | 0.9 ms | 1 | 64 B | 85 B | 1 ms |
+
+A map shows ~12–20 tiles at once. At zoom 7 polygons would be 3.6 MB a tile
+for fields two pixels wide — so from zoom 10 the tile carries the polygons
+(layer `fields`), below it **clusters** (layer `clusters`): each field goes
+to a cell of a 32 × 32 grid by its centroid (`ST_SnapToGrid` in metres of
+3857), one point per cell with `count` and `areaHa`. The grid is anchored at
+a cell corner and a tile is exactly 32 cells, so a field crossing a tile
+edge is counted in exactly one tile (`test/tiles.e2e-spec.ts` sums the four
+child tiles). At zoom 6–7 a cluster tile still reads ~24 000 fields (~250 ms):
+for a farm that size the next step is a cache (tiles keyed by org + z/x/y,
+dropped when a field changes) or a pre-aggregated table per region.
+
+Plan of a zoom 14 tile — the GiST index, 6 rows, 0.36 ms:
+
+```
+Aggregate (actual time=0.329..0.330 rows=1 loops=1)
+  ->  Index Scan using fields_geom_gist on fields f (actual time=0.063..0.188 rows=6 loops=1)
+        Index Cond: (geom && '0103...'::geometry)
+        Filter: ((org_id = '00000000-0000-0000-0000-000000000001'::uuid) AND (st_asmvtgeom(...) IS NOT NULL))
+Execution Time: 0.356 ms
+```
+
+## GeoJSON or tiles
+
+| | `GET /fields?bbox&zoom` (GeoJSON) | `GET /tiles/z/x/y.mvt` |
+|---|---|---|
+| unit | one answer per viewport | fixed grid of tiles, the same URLs for everybody panning there |
+| caching | hardly: every viewport is a different bbox | per tile: browser, CDN, ETag |
+| size | text coordinates; zoom 12, the 49 fields of one tile: 78 KB, 27 KB simplified for the zoom | binary, integer deltas on a 4096 grid: 9.6 KB (zoom 10: 1 026 / 249 KB vs 122 KB) |
+| client | any code: features are data, editable, measurable | a renderer (MapLibre / Mapbox / OpenLayers); geometry is quantised and clipped at tile edges |
+| fits | editing a field, a few hundred features, analysis, export | showing thousands – millions of features, smooth zoom |
+
+The map shows tiles; when the user clicks a field to edit it, the client asks
+`GET /fields/:id` for the exact GeoJSON outline — a tile's outline is cut at
+the tile edge and rounded to the grid, it is not for editing or measuring.

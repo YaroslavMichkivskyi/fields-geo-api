@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { dbOptions } from './database/db-options';
 import { FieldsModule } from './fields/fields.module';
 import { HealthController } from './health/health.controller';
+import { TilesModule } from './tiles/tiles.module';
 import { WarehousesModule } from './warehouses/warehouses.module';
 import { WaterModule } from './water/water.module';
 
@@ -17,6 +18,7 @@ import { WaterModule } from './water/water.module';
     FieldsModule,
     WarehousesModule,
     WaterModule,
+    TilesModule,
   ],
   controllers: [HealthController],
 })
