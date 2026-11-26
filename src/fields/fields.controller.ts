@@ -5,6 +5,8 @@ import { fieldFeature, FieldFeatureInput } from '../geo/geojson.schema';
 import { nearQuery, NearQuery } from '../geo/near';
 import { viewportQuery, ViewportQuery } from '../geo/viewport';
 import { CreatedFeature, Extent, Feature, FeatureCollection, FieldsService } from './fields.service';
+import { importCollection, ImportCollection, importQuery, ImportQuery } from './import.schema';
+import { ImportResult, ImportService } from './import.service';
 import { Collection, FieldOverlap, OverlapPair, OverlapsService } from './overlaps.service';
 
 /** RFC 7946 media type; clients that only know JSON parse it the same way. */
@@ -15,6 +17,7 @@ export class FieldsController {
   constructor(
     private readonly fields: FieldsService,
     private readonly overlaps: OverlapsService,
+    private readonly importer: ImportService,
   ) {}
 
   @Post()
@@ -24,6 +27,16 @@ export class FieldsController {
     @Body(new ZodValidationPipe(fieldFeature)) body: FieldFeatureInput,
   ): Promise<CreatedFeature> {
     return this.fields.create(orgId, body);
+  }
+
+  /** Bulk import of a FeatureCollection: per-Feature errors, partial or all-or-nothing. */
+  @Post('import')
+  import(
+    @OrgId() orgId: string,
+    @Body(new ZodValidationPipe(importCollection)) body: ImportCollection,
+    @Query(new ZodValidationPipe(importQuery, 'Invalid query')) query: ImportQuery,
+  ): Promise<ImportResult> {
+    return this.importer.import(orgId, body, query);
   }
 
   @Get()

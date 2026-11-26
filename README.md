@@ -132,6 +132,15 @@ as map layers with their areas. `buffer_m` overrides the width. Why the buffer
 is never done in degrees:
 [docs/explain.md](docs/explain.md#water-protection-zones-buffer-intersection-difference).
 
+`POST /fields/import` takes a FeatureCollection of up to 5 000 fields (KML /
+Shapefile converted with `ogr2ogr`) and answers with a line per Feature: what
+was imported, what was repaired, and for the rest the index, the name and the
+reason. `mode=partial` (default) stores every valid Feature; `mode=atomic`
+stores nothing if anything is wrong. Whatever the size of the file it is a
+fixed number of queries — one check of all boundaries, one INSERT, one UPDATE
+for the soil samples the new fields adopt. Conversion commands, the choice
+between the modes and timings: [docs/import.md](docs/import.md).
+
 Responses use `application/geo+json`; requests may use it or `application/json`.
 
 ```bash
@@ -189,5 +198,5 @@ docs/           query notes, EXPLAIN plans
 - [x] M6 — proximity: radius search and nearest-N (KNN)
 - [x] M7 — soil samples: point-in-polygon join and stats
 - [x] M8 — water protection zones: buffers, intersection, difference
-- [ ] M9 — bulk import of a FeatureCollection
+- [x] M9 — bulk import of a FeatureCollection
 - [ ] M10 — vector tiles (`ST_AsMVT`)

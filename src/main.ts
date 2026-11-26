@@ -1,11 +1,11 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
-import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { AppModule } from './app.module';
-import { configureApp } from './app.setup';
+import { configureApp, createAdapter } from './app.setup';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter());
+  const app = await NestFactory.create<NestFastifyApplication>(AppModule, createAdapter());
   configureApp(app);
   app.enableShutdownHooks();
   // Fastify listens on localhost only unless told otherwise (matters in Docker)

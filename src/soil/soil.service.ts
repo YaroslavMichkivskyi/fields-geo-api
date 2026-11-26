@@ -137,16 +137,33 @@ export class SoilService {
    * Runs in the caller's transaction when one is passed.
    */
   async assignToField(orgId: string, fieldId: string, manager: EntityManager = this.db.manager): Promise<number> {
+    return this.assignToFields(orgId, [fieldId], manager);
+  }
+
+  /**
+   * The same for many new fields at once (bulk import). A sample may lie in
+   * two of the new fields; DISTINCT ON (sample) keeps one row per sample — the
+   * first by the same rule as on upload: strictly inside, then the oldest.
+   */
+  async assignToFields(orgId: string, fieldIds: string[], manager: EntityManager = this.db.manager): Promise<number> {
+    if (fieldIds.length === 0) return 0;
     // TypeORM answers an UPDATE with [rows, affected count]
     const [, adopted] = await manager.query<[unknown[], number]>(
-      `UPDATE soil_samples s
-          SET field_id = f.id
-         FROM fields f
-        WHERE f.id = $2 AND f.org_id = $1
-          AND s.org_id = $1
-          AND s.field_id IS NULL                      -- never steal a sample from another field
-          AND ST_Covers(f.geom, s.geom)`,             // partial GiST index on unassigned samples
-      [orgId, fieldId],
+      `WITH pick AS (
+         SELECT DISTINCT ON (s.id) s.id AS sample_id, f.id AS field_id
+           FROM fields f
+           JOIN soil_samples s
+             ON s.org_id = f.org_id
+            AND s.field_id IS NULL                    -- never steal a sample from another field
+            AND ST_Covers(f.geom, s.geom)             -- partial GiST index on unassigned samples
+          WHERE f.org_id = $1 AND f.id = ANY($2::uuid[])
+          ORDER BY s.id, ST_Contains(f.geom, s.geom) DESC, f.created_at, f.id
+       )
+       UPDATE soil_samples s
+          SET field_id = pick.field_id
+         FROM pick
+        WHERE s.id = pick.sample_id`,
+      [orgId, fieldIds],
     );
     return adopted;
   }
